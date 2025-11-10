@@ -14,7 +14,7 @@ Ce fichier regroupe les différentes fonctions d'affichage. On y trouve des sort
 C'est le point d'entrée du projet. Il construit le graphe donné dans l'énoncé et lance le serveur d'affichage pour visualiser les résultats.
 
 ### GraphStruct.py
-Ici on retrouve toute la structure de graphe. Ce fichier contient les fonctions qui permettent de manipuler le graphe et d'extraire les informations dont on a besoin pour les algorithmes.
+Ici on retrouve toute la structure de graphe. Ce fichier contient les fonctions qui permettent de manipuler le graphe et d'extraire les informations dont on a besoin pour les algorithmes. Il contient aussi des utilitaires pour charger des graphes depuis un fichier (Des exemples de format possible sont disponibles dans \code)
 
 ### Abstract.py
 C'est le cœur du projet. On y trouve l'algorithme de parcours abstrait qui fonctionne même sur des graphes cycliques. Il contient aussi quelques fonctions de comparaison et une fonction du premier ordre qui optimise le chemin selon la fonction de comparaison qu'on lui passe en paramètres. Vers la fin, il y a une petite fonction de tests. L'algorithme de parcours est bien annoté avec la spécification logique qui permet de démontrer sa correction.

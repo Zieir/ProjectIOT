@@ -15,6 +15,19 @@ class SimpleGraph:
 
     def add_edge(self, u, v, temps_min, temps_max):
         """Ajoute une arête u->v avec deux poids (temps_min, temps_max)."""
+        # Validate and normalize weights so temps_min <= temps_max
+        try:
+            # allow types that support comparison (numbers)
+            if temps_min is None or temps_max is None:
+                raise TypeError('temps_min and temps_max must be numeric and not None')
+            if temps_min > temps_max:
+                # swap to ensure order and inform the user
+                import warnings
+                warnings.warn(f'add_edge: temps_min ({temps_min}) > temps_max ({temps_max}) - swapping the values', UserWarning)
+                temps_min, temps_max = temps_max, temps_min
+        except TypeError:
+            raise TypeError('temps_min and temps_max must be comparable numeric values')
+
         self.add_node(u)
         self.add_node(v)
         self.adj[u][v] = (temps_min, temps_max)
@@ -168,6 +181,220 @@ class SimpleGraph:
             g.add_node(v)
             g.add_edge(u, v, round(mean_estimee,2), round(mean_estimee,2))
         return g
+
+    # ------------------------------------------------------------------
+    # Constructeurs alternatifs et utilitaires
+    # ------------------------------------------------------------------
+    @classmethod
+    def from_edge_list(cls, edges, directed=False, default_weight=(1, 1)):
+        """Construire un SimpleGraph à partir d'un itérable d'arêtes.
+
+        Chaque élément de `edges` peut être :
+          - (u, v, tmin, tmax)
+          - (u, v, w)  -> tmin = tmax = w
+          - (u, v)     -> tmin, tmax = default_weight
+        """
+        g = cls(directed=directed)
+        for e in edges:
+            if len(e) >= 4:
+                u, v, tmin, tmax = e[0], e[1], e[2], e[3]
+            elif len(e) == 3:
+                u, v, w = e
+                tmin = tmax = w
+            elif len(e) == 2:
+                u, v = e
+                tmin, tmax = default_weight
+            else:
+                # skip malformed entries
+                continue
+            g.add_edge(u, v, tmin, tmax)
+        return g
+
+    @classmethod
+    def from_adj_dict(cls, adj_dict, directed=False):
+        """Construire un SimpleGraph à partir d'un dictionnaire de dictionnaires
+        représentant la structure d'adjacence.
+
+        On s'attend à ce que adj_dict[u][v] soit soit un tuple (tmin, tmax),
+        soit une seule valeur (dans ce cas tmin = tmax).
+        """
+        g = cls(directed=directed)
+        for u, nbrs in adj_dict.items():
+            for v, w in nbrs.items():
+                if isinstance(w, (tuple, list)) and len(w) >= 2:
+                    tmin, tmax = w[0], w[1]
+                else:
+                    tmin = tmax = w
+                g.add_edge(u, v, tmin, tmax)
+        return g
+
+    @classmethod
+    def from_dataframe(cls, df, u_col='u', v_col='v', tmin_col='tmin', tmax_col='tmax', directed=False):
+        """Construire un SimpleGraph à partir d'un DataFrame pandas contenant les arêtes en ligne.
+
+        Le DataFrame doit comporter des colonnes pour la source et la destination et au moins une colonne de poids.
+        Si `tmax_col` est absente, la valeur de `tmin_col` est utilisée pour les deux poids.
+        """
+        try:
+            import pandas as _pd  # optional dependency
+        except Exception:
+            _pd = None
+        if _pd is None:
+            raise RuntimeError('pandas is required to build a graph from a DataFrame')
+        if not set([u_col, v_col]).issubset(df.columns):
+            raise ValueError(f'DataFrame must contain columns {u_col} and {v_col}')
+
+        g = cls(directed=directed)
+        for _, row in df.iterrows():
+            u = row[u_col]
+            v = row[v_col]
+            if tmin_col in df.columns:
+                tmin = row[tmin_col]
+            elif 'weight' in df.columns:
+                tmin = row['weight']
+            else:
+                raise ValueError('No weight column found (expected tmin or weight)')
+
+            if tmax_col in df.columns:
+                tmax = row[tmax_col]
+            else:
+                tmax = tmin
+
+            g.add_edge(u, v, tmin, tmax)
+        return g
+
+    def relabel_to_ints(self, start=1):
+        """Return a new graph with nodes relabeled to consecutive integers starting at `start`.
+
+        Returns (new_graph, mapping) where mapping maps old_label -> new_int.
+        """
+        nodes = list(self.nodes())
+        mapping = {old: i for i, old in enumerate(nodes, start)}
+        g = SimpleGraph(directed=self.directed)
+        for u, v, tmin, tmax in self.edges():
+            g.add_edge(mapping[u], mapping[v], tmin, tmax)
+        return g, mapping
+
+    @classmethod
+    def from_csv(cls, file_path, directed=False, u_col='u', v_col='v', tmin_col='tmin', tmax_col='tmax', has_header=True, default_weight=(1,1)):
+        """Charger un graphe depuis un fichier CSV.
+
+        Si `has_header` est True, le CSV doit contenir des colonnes nommées par u_col/v_col
+        et au moins une colonne de poids (tmin_col ou 'weight'). Si has_header est False,
+        chaque ligne est supposée contenir 2, 3 ou 4 colonnes (u, v[, tmin[, tmax]]).
+        """
+        import csv
+        g = cls(directed=directed)
+        with open(file_path, newline='') as fh:
+            if has_header:
+                reader = csv.DictReader(fh)
+                # Vérifier présence des colonnes source/destination
+                if not set([u_col, v_col]).issubset(reader.fieldnames):
+                    raise ValueError(f'CSV doit contenir les colonnes {u_col} et {v_col}')
+                for row in reader:
+                    u = row[u_col]
+                    v = row[v_col]
+                    # Récupérer tmin : préférence à la colonne tmin, sinon 'weight', sinon valeur par défaut
+                    if tmin_col in reader.fieldnames and row.get(tmin_col, '') != '':
+                        tmin = cls._safe_number(row[tmin_col])
+                    elif 'weight' in reader.fieldnames and row.get('weight', '') != '':
+                        tmin = cls._safe_number(row['weight'])
+                    else:
+                        tmin = default_weight[0]
+
+                    # Récupérer tmax : si absent, on reprend tmin (ou valeur par défaut si tmin est None)
+                    if tmax_col in reader.fieldnames and row.get(tmax_col, '') != '':
+                        tmax = cls._safe_number(row[tmax_col])
+                    else:
+                        tmax = tmin if tmin is not None else default_weight[1]
+
+                    g.add_edge(u, v, tmin, tmax)
+            else:
+                reader = csv.reader(fh)
+                for row in reader:
+                    # Ignorer lignes vides ou mal formées
+                    if len(row) >= 4:
+                        u, v, tmin, tmax = row[0], row[1], cls._safe_number(row[2]), cls._safe_number(row[3])
+                    elif len(row) == 3:
+                        u, v, w = row[0], row[1], cls._safe_number(row[2])
+                        tmin = tmax = w
+                    elif len(row) == 2:
+                        u, v = row[0], row[1]
+                        tmin, tmax = default_weight
+                    else:
+                        continue
+                    g.add_edge(u, v, tmin, tmax)
+        return g
+
+    @classmethod
+    def from_json(cls, file_path, directed=False):
+        """Charger un graphe depuis un fichier JSON.
+
+        Accepte soit un dictionnaire d'adjacence (u -> {v: poids ou [tmin,tmax]})
+        soit une liste d'arêtes ([u,v] ou [u,v,w] ou [u,v,tmin,tmax]).
+        """
+        import json
+        with open(file_path) as fh:
+            obj = json.load(fh)
+
+        if isinstance(obj, dict):
+            return cls.from_adj_dict(obj, directed=directed)
+        elif isinstance(obj, list):
+            return cls.from_edge_list(obj, directed=directed)
+        else:
+            raise ValueError('Format JSON non supporté : attendu dict ou list')
+
+    @classmethod
+    def from_edgelist_file(cls, file_path, directed=False, sep=None, default_weight=(1,1)):
+        """Charger un fichier d'arêtes simple (séparateur espace ou personnalisé).
+
+        Chaque ligne non vide doit contenir 2, 3 ou 4 tokens : u v [w] [w2].
+        """
+        g = cls(directed=directed)
+        with open(file_path) as fh:
+            for line in fh:
+                line = line.strip()
+                # Ignorer commentaires et lignes vides
+                if not line or line.startswith('#'):
+                    continue
+                parts = line.split() if sep is None else line.split(sep)
+                if len(parts) >= 4:
+                    u, v, tmin, tmax = parts[0], parts[1], cls._safe_number(parts[2]), cls._safe_number(parts[3])
+                elif len(parts) == 3:
+                    u, v, w = parts[0], parts[1], cls._safe_number(parts[2])
+                    tmin = tmax = w
+                elif len(parts) == 2:
+                    u, v = parts[0], parts[1]
+                    tmin, tmax = default_weight
+                else:
+                    continue
+                g.add_edge(u, v, tmin, tmax)
+        return g
+
+    @staticmethod
+    def _safe_number(val):
+        """Essaye de convertir une valeur en int ou float, renvoie None si vide, lève sinon.
+
+        Retourne int si possible, sinon float. Lève ValueError si conversion impossible.
+        """
+        if val is None:
+            return None
+        if isinstance(val, (int, float)):
+            return val
+        s = str(val).strip()
+        if s == '':
+            return None
+        try:
+            # Prioriser int si pas de point décimal ni exposant
+            if '.' in s or 'e' in s or 'E' in s:
+                return float(s)
+            return int(s)
+        except Exception:
+            try:
+                return float(s)
+            except Exception:
+                raise ValueError(f'Impossible de parser la valeur numérique : {val}')
+
             
 
 def create_example_graph():
